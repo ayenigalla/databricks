@@ -318,7 +318,51 @@ df.toPandas().to_csv("/dbfs/tmp/pipeline_dbu_usage.csv", index=False)
 
 ---
 
-## 4. Caveats worth knowing before you trust the numbers
+## 4. SCD Type 1 — both senses
+
+"SCD1" shows up in two different places here, so both are covered.
+
+### 4.1 Querying SCD1-style system tables (simpler than the SCD2 pattern in §1)
+`system.lakeflow.pipelines`, `jobs`, and `job_tasks` are **SCD2** — every change appends a new row, so you need the `ROW_NUMBER() ... QUALIFY rn=1` pattern from §1.3/§1.9 to get the current version. Fact/log tables like `system.billing.usage` and `system.lakeflow.pipeline_update_timeline` behave more like **SCD1** in effect — there's no "current version" to pick out, you just query them directly (each row is already a discrete event, not a row that gets superseded):
+```sql
+-- No dedup needed — every row is a distinct, final event
+SELECT pipeline_id, update_id, start_time, end_time, result_state
+FROM system.lakeflow.pipeline_update_timeline
+WHERE pipeline_id = '00732f83-cd59-4c76-ac0d-57958532ab5b'
+ORDER BY start_time DESC;
+```
+If you're ever unsure whether a system table needs the dedup pattern, check for a `change_time`/`delete_time` pair — that's the SCD2 tell. If those columns don't exist, treat it as SCD1/append-only and skip the `QUALIFY`.
+
+### 4.2 Implementing SCD Type 1 in your own Bronze → Silver pipeline
+If the question is really about how *your* Silver merge should be built (overwrite-in-place rather than versioned history), Lakeflow Declarative Pipelines does this natively with `AUTO CDC INTO`:
+```sql
+CREATE OR REFRESH STREAMING TABLE silver_customers;
+
+AUTO CDC INTO silver_customers
+FROM STREAM(bronze_customers)
+KEYS (customer_id)
+SEQUENCE BY updated_at
+STORED AS SCD TYPE 1;
+```
+```python
+# Python (PySpark) equivalent, inside a Lakeflow Declarative Pipeline
+import dlt
+
+dlt.create_streaming_table("silver_customers")
+
+dlt.create_auto_cdc_flow(
+    target="silver_customers",
+    source="bronze_customers",
+    keys=["customer_id"],
+    sequence_by="updated_at",
+    stored_as_scd_type=1,
+)
+```
+SCD Type 1 keeps only the latest value per key (no history) — cheapest to store and query, right choice when Silver only needs to reflect current state. Swap `stored_as_scd_type=1` for `2` (or `STORED AS SCD TYPE 2`) if you need to preserve the change history instead — that's a one-line switch, no pipeline redesign required. Worth noting for the cost model: SCD1 merges are typically cheaper per run than SCD2, since there's no extra history-row bookkeeping — if your Silver layer uses SCD1, the "Avg delta volume per run" input in the B2S sizing sheet can reasonably stay on the low end.
+
+---
+
+## 5. Caveats worth knowing before you trust the numbers
 
 - **`pipelines` and `pipeline_update_timeline` are newer/Public-Preview-stage tables** in some accounts — confirm they're enabled and populated before relying on the joins in §1.3/1.7/1.8.
 - **SCD2 tables** (`pipelines`, `jobs`, `job_tasks`) keep full change history — always filter to the latest row per entity (the `ROW_NUMBER() ... QUALIFY rn=1` pattern used above) or you'll double-count.
