@@ -6,14 +6,39 @@
 # MAGIC pipeline/job cost data out of Databricks' Unity Catalog system schemas. Every query cell
 # MAGIC below is read-only — safe to run as-is against your workspace.
 # MAGIC
-# MAGIC **How to use this notebook:** swap the placeholder pipeline ID (`00732f83-cd59-4c76-ac0d-57958532ab5b`)
-# MAGIC for your own throughout, and run cells top to bottom. Widgets are set up in the next cell so you
-# MAGIC only have to change the ID once.
+# MAGIC **How to use this notebook:** set the widgets at the top — **Pipeline ID** (swap in your own),
+# MAGIC **Pipeline Run/Update ID** (optional — leave blank to see all runs), and **Run Date** (optional —
+# MAGIC leave blank and every query defaults to the last 30 days through today). Then run cells top to
+# MAGIC bottom; every `%sql` cell below picks the widgets up automatically via `$pipeline_id`,
+# MAGIC `$update_id`, `$effective_start_date` and `$effective_end_date`.
 
 # COMMAND ----------
 
-# Widget so you only set the pipeline ID once — every %sql cell below reads it via $pipeline_id
+# Widgets so you only set these once — every %sql cell below reads them via $variable
 dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pipeline ID")
+dbutils.widgets.text("update_id", "", "Pipeline Run/Update ID (optional — blank = all runs)")
+dbutils.widgets.text("run_date", "", "Run Date, YYYY-MM-DD (optional — blank = last 30 days)")
+
+# COMMAND ----------
+
+# Resolve the date range: a specific run_date means "just that day";
+# leaving it blank means "last 30 days through today". Re-run this cell
+# any time you change the run_date widget above.
+from datetime import date, timedelta
+
+run_date_input = dbutils.widgets.get("run_date").strip()
+if run_date_input:
+    effective_start_date = run_date_input
+    effective_end_date = run_date_input
+else:
+    effective_start_date = (date.today() - timedelta(days=30)).isoformat()
+    effective_end_date = date.today().isoformat()
+
+dbutils.widgets.text("effective_start_date", effective_start_date, "Effective Start Date (resolved)")
+dbutils.widgets.text("effective_end_date", effective_end_date, "Effective End Date (resolved)")
+
+print(f"Using date range: {effective_start_date} to {effective_end_date}"
+      + (" (explicit run_date)" if run_date_input else " (default: last 30 days)"))
 
 # COMMAND ----------
 
@@ -45,6 +70,8 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 
 # MAGIC %md
 # MAGIC ### 1.1 Raw DBU usage for one pipeline
+# MAGIC Respects all three widgets: filters to `update_id` if you set one, and to the resolved
+# MAGIC date range (`run_date`, or last 30 days if you left it blank) either way.
 
 # COMMAND ----------
 
@@ -58,7 +85,8 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 # MAGIC   usage_quantity                 AS dbus
 # MAGIC FROM system.billing.usage
 # MAGIC WHERE usage_metadata.dlt_pipeline_id = '$pipeline_id'
-# MAGIC   AND usage_date >= DATE_SUB(CURRENT_DATE(), 90)
+# MAGIC   AND ('$update_id' = '' OR usage_metadata.dlt_update_id = '$update_id')
+# MAGIC   AND usage_date BETWEEN '$effective_start_date' AND '$effective_end_date'
 # MAGIC ORDER BY usage_date
 
 # COMMAND ----------
@@ -81,7 +109,8 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 # MAGIC  AND u.usage_start_time >= lp.price_start_time
 # MAGIC  AND (u.usage_start_time < lp.price_end_time OR lp.price_end_time IS NULL)
 # MAGIC WHERE u.usage_metadata.dlt_pipeline_id = '$pipeline_id'
-# MAGIC   AND u.usage_date >= DATE_SUB(CURRENT_DATE(), 90)
+# MAGIC   AND ('$update_id' = '' OR u.usage_metadata.dlt_update_id = '$update_id')
+# MAGIC   AND u.usage_date BETWEEN '$effective_start_date' AND '$effective_end_date'
 # MAGIC GROUP BY ALL
 # MAGIC ORDER BY u.usage_date
 
@@ -111,7 +140,7 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 # MAGIC LEFT JOIN latest_pipelines p
 # MAGIC   ON u.workspace_id = p.workspace_id AND u.usage_metadata.dlt_pipeline_id = p.pipeline_id
 # MAGIC WHERE u.usage_metadata.dlt_pipeline_id IS NOT NULL
-# MAGIC   AND u.usage_date >= DATE_SUB(CURRENT_DATE(), 30)
+# MAGIC   AND u.usage_date BETWEEN '\$effective_start_date' AND '\$effective_end_date'
 # MAGIC GROUP BY ALL
 # MAGIC ORDER BY total_cost_usd DESC
 # MAGIC LIMIT 25
@@ -152,7 +181,7 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 # MAGIC   SUM(u.usage_quantity) / NULLIF(SUM(DATEDIFF(SECOND, u.usage_start_time, u.usage_end_time)) / 3600.0, 0) AS dbu_per_hour
 # MAGIC FROM system.billing.usage u
 # MAGIC WHERE u.usage_metadata.dlt_pipeline_id IS NOT NULL
-# MAGIC   AND u.usage_date >= DATE_SUB(CURRENT_DATE(), 90)
+# MAGIC   AND u.usage_date BETWEEN '\$effective_start_date' AND '\$effective_end_date'
 # MAGIC GROUP BY ALL
 # MAGIC ORDER BY total_dbus DESC
 
@@ -172,7 +201,7 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 # MAGIC   ROUND(SUM(usage_quantity), 1)   AS total_dbus
 # MAGIC FROM system.billing.usage
 # MAGIC WHERE usage_metadata.uc_table_name IS NOT NULL
-# MAGIC   AND usage_date >= DATE_SUB(CURRENT_DATE(), 30)
+# MAGIC   AND usage_date BETWEEN '\$effective_start_date' AND '\$effective_end_date'
 # MAGIC GROUP BY ALL
 # MAGIC ORDER BY total_dbus DESC
 
@@ -180,6 +209,8 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 
 # MAGIC %md
 # MAGIC ### 1.7 Pipeline run history — duration, result, trigger type
+# MAGIC Set `update_id` to drill into one specific run; leave it blank to see every run in the
+# MAGIC resolved date range.
 
 # COMMAND ----------
 
@@ -194,6 +225,8 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 # MAGIC   trigger_type
 # MAGIC FROM system.lakeflow.pipeline_update_timeline
 # MAGIC WHERE pipeline_id = '$pipeline_id'
+# MAGIC   AND ('$update_id' = '' OR update_id = '$update_id')
+# MAGIC   AND DATE(start_time) BETWEEN '$effective_start_date' AND '$effective_end_date'
 # MAGIC ORDER BY start_time DESC
 # MAGIC LIMIT 100
 
@@ -201,6 +234,7 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 
 # MAGIC %md
 # MAGIC ### 1.8 Join cost to run duration — $ per update, and $/minute
+# MAGIC Also respects `update_id` (blank = every update) and the resolved date range.
 
 # COMMAND ----------
 
@@ -208,6 +242,8 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 # MAGIC WITH updates AS (
 # MAGIC   SELECT pipeline_id, update_id, start_time, end_time, result_state
 # MAGIC   FROM system.lakeflow.pipeline_update_timeline
+# MAGIC   WHERE ('$update_id' = '' OR update_id = '$update_id')
+# MAGIC     AND DATE(start_time) BETWEEN '$effective_start_date' AND '$effective_end_date'
 # MAGIC ),
 # MAGIC costs AS (
 # MAGIC   SELECT
@@ -255,7 +291,7 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 # MAGIC LEFT JOIN latest_jobs j
 # MAGIC   ON u.workspace_id = j.workspace_id AND u.usage_metadata.job_id = j.job_id
 # MAGIC WHERE u.usage_metadata.job_id IS NOT NULL
-# MAGIC   AND u.usage_date >= DATE_SUB(CURRENT_DATE(), 30)
+# MAGIC   AND u.usage_date BETWEEN '\$effective_start_date' AND '\$effective_end_date'
 # MAGIC GROUP BY ALL
 # MAGIC ORDER BY total_cost_usd DESC
 
@@ -276,7 +312,7 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 # MAGIC   ON u.sku_name = lp.sku_name AND u.cloud = lp.cloud
 # MAGIC  AND u.usage_start_time >= lp.price_start_time
 # MAGIC  AND (u.usage_start_time < lp.price_end_time OR lp.price_end_time IS NULL)
-# MAGIC WHERE u.usage_date >= DATE_SUB(CURRENT_DATE(), 30)
+# MAGIC WHERE u.usage_date BETWEEN '\$effective_start_date' AND '\$effective_end_date'
 # MAGIC GROUP BY ALL
 # MAGIC ORDER BY total_cost_usd DESC
 
@@ -302,7 +338,7 @@ dbutils.widgets.text("pipeline_id", "00732f83-cd59-4c76-ac0d-57958532ab5b", "Pip
 # MAGIC  AND u.usage_start_time >= lp.price_start_time
 # MAGIC  AND (u.usage_start_time < lp.price_end_time OR lp.price_end_time IS NULL)
 # MAGIC WHERE u.usage_metadata.dlt_pipeline_id IS NOT NULL
-# MAGIC   AND u.usage_date >= DATE_SUB(CURRENT_DATE(), 30)
+# MAGIC   AND u.usage_date BETWEEN '\$effective_start_date' AND '\$effective_end_date'
 # MAGIC GROUP BY ALL
 
 # COMMAND ----------
@@ -361,7 +397,7 @@ SELECT usage_metadata.dlt_pipeline_id AS pipeline_id,
        SUM(usage_quantity) AS total_dbus
 FROM system.billing.usage
 WHERE usage_metadata.dlt_pipeline_id IS NOT NULL
-  AND usage_date >= DATE_SUB(CURRENT_DATE(), 90)
+  AND usage_date BETWEEN '\$effective_start_date' AND '\$effective_end_date'
 GROUP BY ALL
 '''
 
@@ -444,6 +480,8 @@ df.toPandas().to_csv("/dbfs/tmp/pipeline_dbu_usage.csv", index=False)
 # MAGIC SELECT pipeline_id, update_id, start_time, end_time, result_state
 # MAGIC FROM system.lakeflow.pipeline_update_timeline
 # MAGIC WHERE pipeline_id = '$pipeline_id'
+# MAGIC   AND ('$update_id' = '' OR update_id = '$update_id')
+# MAGIC   AND DATE(start_time) BETWEEN '$effective_start_date' AND '$effective_end_date'
 # MAGIC ORDER BY start_time DESC
 
 # COMMAND ----------
