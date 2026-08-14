@@ -1,0 +1,64 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-08-14T00:00:00.000Z" agent="Claude" version="24.0.0" type="device">
+  <diagram name="Bronze to Silver Architecture" id="bronze-silver-arch">
+    <mxGraphModel dx="1400" dy="800" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="826" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- Title -->
+        <mxCell id="title" value="Bronze &#8594; Silver: DB2 Replication &amp; SCD1 Transformation Pipeline" style="text;html=1;align=center;verticalAlign=middle;fontSize=18;fontStyle=1;fontColor=#1F2430;" vertex="1" parent="1">
+          <mxGeometry x="40" y="20" width="900" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- DB2 -->
+        <mxCell id="db2" value="DB2&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Source System (OLTP)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#4C5B77;strokeColor=none;fontColor=#FFFFFF;fontSize=14;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="200" width="160" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Stelo -->
+        <mxCell id="stelo" value="Stelo&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Replication Stream (CDC)&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#2E86AB;strokeColor=none;fontColor=#FFFFFF;fontSize=14;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="280" y="200" width="180" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Bronze -->
+        <mxCell id="bronze" value="Bronze Layer&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Databricks / Delta&lt;br&gt;Raw, append-only&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#A9714B;strokeColor=none;fontColor=#FFFFFF;fontSize=14;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="540" y="200" width="180" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Transform Job -->
+        <mxCell id="transform" value="Transform Job&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Databricks Pipeline&lt;br&gt;SCD Type 1 Merge&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#5B7F5A;strokeColor=none;fontColor=#FFFFFF;fontSize=14;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="800" y="80" width="200" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Silver -->
+        <mxCell id="silver" value="Silver Layer&lt;br&gt;&lt;font style=&quot;font-size:11px&quot;&gt;Databricks / Delta&lt;br&gt;Curated, SCD1&lt;/font&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#8C97A8;strokeColor=none;fontColor=#FFFFFF;fontSize=14;fontStyle=1;arcSize=12;" vertex="1" parent="1">
+          <mxGeometry x="800" y="320" width="200" height="90" as="geometry" />
+        </mxCell>
+
+        <!-- Edges -->
+        <mxCell id="e1" value="CDC feed" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#555B6E;fontColor=#333844;fontSize=11;labelBackgroundColor=#FFFFFF;align=center;" edge="1" parent="1" source="db2" target="stelo">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e2" value="Replicated changes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#555B6E;fontColor=#333844;fontSize=11;labelBackgroundColor=#FFFFFF;align=center;" edge="1" parent="1" source="stelo" target="bronze">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e3" value="Read raw change records" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#555B6E;fontColor=#333844;fontSize=11;labelBackgroundColor=#FFFFFF;align=center;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="bronze" target="transform">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e4" value="MERGE (upsert, overwrite)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;elbow=vertical;startArrow=none;strokeColor=#555B6E;fontColor=#333844;fontSize=11;labelBackgroundColor=#FFFFFF;align=center;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="transform" target="silver">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Footnote -->
+        <mxCell id="footnote" value="SCD Type 1: matched records are overwritten with latest values (no history retained); unmatched records are inserted." style="text;html=1;align=center;verticalAlign=middle;fontSize=11;fontStyle=2;fontColor=#555B6E;" vertex="1" parent="1">
+          <mxGeometry x="280" y="450" width="700" height="30" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
