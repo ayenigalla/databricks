@@ -34,6 +34,7 @@ dbutils.widgets.dropdown(
 dbutils.widgets.text("backlog_seconds_alert", "900", "Alert: backlog age (seconds) >")
 dbutils.widgets.text("expectation_fail_rate_alert", "5", "Alert: expectation fail rate (%) >")
 
+# COMMAND ----------
 pipeline_id = dbutils.widgets.get("pipeline_id")
 lookback_hours = int(dbutils.widgets.get("lookback_hours"))
 backlog_seconds_alert = int(dbutils.widgets.get("backlog_seconds_alert"))
@@ -259,6 +260,110 @@ else:
     ax.legend(fontsize=8, frameon=False)
     plt.tight_layout()
     plt.show()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 4c. Output Size per Incremental Update / Load
+# MAGIC
+# MAGIC Each `flow_progress` event carries `metrics.num_output_bytes` — the size
+# MAGIC written by that specific run of the flow. In continuous mode that's
+# MAGIC effectively "how big was this micro-batch/increment," not a whole-table
+# MAGIC size. `flow_type` (from `flow_definition`, joined in below) tells you
+# MAGIC whether a flow is inherently incremental (`APPEND`, `CHANGE`) or a full
+# MAGIC rewrite each time (`COMPLETE`, `MATERIALIZED_VIEW` without incremental
+# MAGIC refresh) — a `COMPLETE`/`MATERIALIZED_VIEW` flow showing the *same* output
+# MAGIC size on every run is expected; an `APPEND`/`CHANGE` flow doing that is not.
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC WITH latest_flow_type AS (
+# MAGIC   SELECT
+# MAGIC     origin.flow_name AS flow_name,
+# MAGIC     details:flow_definition.flow_type::string AS flow_type
+# MAGIC   FROM event_log_recent
+# MAGIC   WHERE event_type = 'flow_definition'
+# MAGIC   QUALIFY ROW_NUMBER() OVER (PARTITION BY origin.flow_name ORDER BY timestamp DESC) = 1
+# MAGIC )
+# MAGIC SELECT
+# MAGIC   fp.timestamp,
+# MAGIC   fp.origin.flow_name AS flow_name,
+# MAGIC   ft.flow_type,
+# MAGIC   details:flow_progress.status::string AS status,
+# MAGIC   details:flow_progress.metrics.num_output_rows::bigint AS output_rows,
+# MAGIC   details:flow_progress.metrics.num_output_bytes::bigint AS output_bytes,
+# MAGIC   ROUND(details:flow_progress.metrics.num_output_bytes::double / 1024 / 1024, 2) AS output_mb
+# MAGIC FROM event_log_recent fp
+# MAGIC LEFT JOIN latest_flow_type ft ON ft.flow_name = fp.origin.flow_name
+# MAGIC WHERE fp.event_type = 'flow_progress'
+# MAGIC   AND details:flow_progress.metrics.num_output_bytes IS NOT NULL
+# MAGIC ORDER BY fp.timestamp DESC
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC -- Rollup: typical and total load size per flow over the lookback window
+# MAGIC SELECT
+# MAGIC   origin.flow_name AS flow_name,
+# MAGIC   COUNT(*) AS num_updates,
+# MAGIC   SUM(details:flow_progress.metrics.num_output_rows::bigint) AS total_output_rows,
+# MAGIC   ROUND(SUM(details:flow_progress.metrics.num_output_bytes::double) / 1024 / 1024, 2) AS total_output_mb,
+# MAGIC   ROUND(AVG(details:flow_progress.metrics.num_output_bytes::double) / 1024 / 1024, 2) AS avg_output_mb_per_update,
+# MAGIC   ROUND(MAX(details:flow_progress.metrics.num_output_bytes::double) / 1024 / 1024, 2) AS max_output_mb_per_update
+# MAGIC FROM event_log_recent
+# MAGIC WHERE event_type = 'flow_progress'
+# MAGIC   AND details:flow_progress.metrics.num_output_bytes IS NOT NULL
+# MAGIC GROUP BY origin.flow_name
+# MAGIC ORDER BY total_output_mb DESC
+
+# COMMAND ----------
+
+output_size_df = spark.sql("""
+    SELECT
+      timestamp,
+      origin.flow_name AS flow_name,
+      details:flow_progress.metrics.num_output_bytes::double / 1024 / 1024 AS output_mb
+    FROM event_log_recent
+    WHERE event_type = 'flow_progress'
+      AND details:flow_progress.metrics.num_output_bytes IS NOT NULL
+    ORDER BY timestamp
+""").toPandas()
+
+if output_size_df.empty:
+    print("No num_output_bytes metrics in this window — the flow may not have "
+          "completed an update yet, or this source type doesn't report byte size.")
+else:
+    top_flows = output_size_df.groupby("flow_name")["output_mb"].sum().sort_values(ascending=False).head(5).index
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for flow in top_flows:
+        sub = output_size_df[output_size_df["flow_name"] == flow]
+        ax.plot(sub["timestamp"], sub["output_mb"], linewidth=2, marker="o", markersize=4, label=flow)
+    ax.set_ylabel("Output size (MB) per update")
+    ax.set_title("Per-update load size — top 5 flows by total MB")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.legend(fontsize=8, frameon=False)
+    plt.tight_layout()
+    plt.show()
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC For materialized views, whether a given update was a true **incremental**
+# MAGIC refresh or a **full recompute** is decided per-update and logged in
+# MAGIC `planning_information` (`technique_information`) — not in `flow_progress`.
+# MAGIC The exact sub-field names for the chosen technique aren't in Databricks'
+# MAGIC public schema reference as of August 2026, so pull the raw payload to see
+# MAGIC the real shape before building a query on top of it:
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT timestamp, origin.flow_name, details:planning_information AS planning_information
+# MAGIC FROM event_log_recent
+# MAGIC WHERE event_type = 'planning_information'
+# MAGIC ORDER BY timestamp DESC
+# MAGIC LIMIT 20
 
 # COMMAND ----------
 
